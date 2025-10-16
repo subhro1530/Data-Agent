@@ -17,9 +17,18 @@ async function init() {
       size numeric,
       uploaded_at timestamptz not null default now(),
       summary_json jsonb,
-      raw_json jsonb
+      raw_json jsonb,
+      status text not null default 'completed',
+      last_error text
     );
   `);
+  // Backfill columns for older deployments
+  await pool.query(
+    `alter table processed_files add column if not exists status text not null default 'completed';`
+  );
+  await pool.query(
+    `alter table processed_files add column if not exists last_error text;`
+  );
 }
 
 async function query(text, params) {

@@ -16,6 +16,36 @@ app.get("/health", (req, res) => res.json({ status: "ok" }));
 // API routes
 app.use("/api", routes);
 
+// Additional API health route with DB check
+app.get("/api/health", async (req, res) => {
+  const started = Date.now();
+  try {
+    const nowRes = await db.query("select now() as now");
+    const verRes = await db.query("select version() as version");
+    return res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      uptime_seconds: Math.round(process.uptime()),
+      db: {
+        status: "ok",
+        now: nowRes.rows[0]?.now,
+        version: verRes.rows[0]?.version,
+        latency_ms: Date.now() - started,
+      },
+    });
+  } catch (e) {
+    return res.status(503).json({
+      status: "degraded",
+      timestamp: new Date().toISOString(),
+      uptime_seconds: Math.round(process.uptime()),
+      db: {
+        status: "failed",
+        error: e.message,
+      },
+    });
+  }
+});
+
 // Global error handler
 app.use((err, req, res, next) => {
   console.error("[ERROR]", err);
