@@ -150,3 +150,100 @@ exports.detail = async (req, res, next) => {
     next(e);
   }
 };
+
+// On-demand summarization for an existing record (GET/POST)
+exports.summarizeNow = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { rows } = await db.query(
+      `select id, filename, filetype, size as size_kb, uploaded_at, raw_json
+         from processed_files
+        where id = $1
+        limit 1`,
+      [id]
+    );
+    if (!rows.length) {
+      const err = new Error("Not found");
+      err.status = 404;
+      throw err;
+    }
+    const r = rows[0];
+    const data = r.raw_json;
+
+    let record_count = 1;
+    let detected_columns = [];
+    if (Array.isArray(data)) {
+      record_count = data.length;
+      if (record_count && typeof data[0] === "object" && data[0] !== null) {
+        detected_columns = Object.keys(data[0]);
+      }
+    } else if (data && typeof data === "object") {
+      detected_columns = Object.keys(data);
+    }
+
+    const metadata = {
+      filename: r.filename,
+      filetype: r.filetype,
+      size_kb: r.size_kb,
+      upload_timestamp: r.uploaded_at,
+      record_count,
+      detected_columns,
+    };
+
+    await db.query(
+      `update processed_files set status = 'processing', last_error = null where id = $1`,
+      [id]
+    );
+
+    const apiKey = process.env.GEMINI_API_KEY || "";
+    const ai_summary = await summarize({ apiKey, parsedData: data, metadata });
+
+    if (
+      !ai_summary ||
+      typeof ai_summary !== "object" ||
+      !Object.keys(ai_summary).length
+    ) {
+      throw new Error("Empty summary received from Gemini");
+    }
+
+    await db.query(
+      `update processed_files
+          set summary_json = $1::jsonb,
+              status = 'completed',
+              last_error = null
+        where id = $2`,
+      [JSON.stringify(ai_summary), id]
+    );
+
+    res.json({ id, status: "completed", ai_summary });
+  } catch (e) {
+    try {
+      if (req.params?.id) {
+        await db.query(
+          `update processed_files set status = 'failed', last_error = $1 where id = $2`,
+          [String(e && e.message ? e.message : e), req.params.id]
+        );
+      }
+    } catch (_) {}
+    next(e);
+  }
+};
+
+// Delete a record
+exports.remove = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query(
+      `delete from processed_files where id = $1 returning id`,
+      [id]
+    );
+    if (!result.rowCount) {
+      const err = new Error("Not found");
+      err.status = 404;
+      throw err;
+    }
+    res.status(204).end();
+  } catch (e) {
+    next(e);
+  }
+};
