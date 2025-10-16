@@ -63,11 +63,17 @@ exports.upload = async (req, res, next) => {
           parsedData: parsed.data,
           metadata,
         });
+        const isObject = ai_summary && typeof ai_summary === "object";
+        const isNonEmpty = isObject && Object.keys(ai_summary).length > 0;
+        if (!isNonEmpty) {
+          throw new Error("Empty summary received from Gemini");
+        }
         const summaryJson = JSON.stringify(ai_summary);
         await db.query(
           `update processed_files
              set summary_json = $1::jsonb,
-                 status = 'completed'
+                 status = 'completed',
+                 last_error = null
            where id = $2`,
           [summaryJson, id]
         );

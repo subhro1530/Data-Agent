@@ -18,16 +18,20 @@ async function init() {
       uploaded_at timestamptz not null default now(),
       summary_json jsonb,
       raw_json jsonb,
-      status text not null default 'completed',
+      status text not null default 'processing',
       last_error text
     );
   `);
   // Backfill columns for older deployments
   await pool.query(
-    `alter table processed_files add column if not exists status text not null default 'completed';`
+    `alter table processed_files add column if not exists status text not null default 'processing';`
   );
   await pool.query(
     `alter table processed_files add column if not exists last_error text;`
+  );
+  // Ensure default is 'processing' going forward
+  await pool.query(
+    `alter table processed_files alter column status set default 'processing';`
   );
 }
 

@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
-const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+const MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 
 // Truncate large inputs to keep requests small
 function buildSample(input, maxChars = 120_000) {
@@ -11,6 +11,29 @@ function buildSample(input, maxChars = 120_000) {
     text.slice(0, maxChars) +
     `\n\n[Truncated for summarization: original length ${text.length} chars]`
   );
+}
+
+function tryParseJsonLoose(txt) {
+  if (!txt) return null;
+  // Strip common markdown fences
+  const cleaned = String(txt)
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```$/i, "");
+  // Try direct parse
+  try {
+    return JSON.parse(cleaned);
+  } catch {}
+  // Fallback: extract first {...} block
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    const slice = cleaned.slice(start, end + 1);
+    try {
+      return JSON.parse(slice);
+    } catch {}
+  }
+  return null;
 }
 
 async function summarize({ apiKey, parsedData, metadata }) {
@@ -80,20 +103,25 @@ ${sample}`,
 
   const json = await res.json();
   const candidates = json.candidates || [];
-  const content = candidates[0]?.content?.parts?.[0]?.text || "{}";
-
-  // The API is instructed to return pure JSON text
-  try {
-    return JSON.parse(content);
-  } catch {
-    // Fallback: wrap as text if parsing fails
-    return {
-      summary: String(content).slice(0, 1000),
-      insights: [],
-      anomalies: [],
-      data_overview: {},
-    };
+  if (!candidates.length) {
+    const pf = json.promptFeedback?.blockReason || "no-candidates";
+    throw new Error(`Gemini returned no candidates (reason: ${pf})`);
   }
+  // Find first part with text or inline_data
+  const parts = candidates[0]?.content?.parts || [];
+  let text = parts.find((p) => typeof p.text === "string")?.text;
+  if (!text && parts[0]?.inlineData?.data) {
+    try {
+      const b64 = parts[0].inlineData.data;
+      text = Buffer.from(b64, "base64").toString("utf-8");
+    } catch {}
+  }
+  const parsed = tryParseJsonLoose(text);
+  if (parsed && typeof parsed === "object" && Object.keys(parsed).length) {
+    return parsed;
+  }
+  // If still nothing useful, throw so caller marks failed
+  throw new Error("Gemini returned empty or non-JSON content");
 }
 
 module.exports = { summarize, buildSample };
